@@ -5,7 +5,9 @@
 Explore the western delta of Jezero crater with MRO/CTX imagery, native MGS/MOLA elevation and shot counts, and three Perseverance sites. Choose two sites or place your own endpoints, tune terrain priorities, inspect the route briefing and download the result. The downloadable geometry uses east longitude and planetocentric north latitude on **Mars**. Earth GIS tools may display it on Earth by default.
 
 ## For our team
+## Team Contributions
 
+Quantumions developed Marswalk collaboratively. Both team members contributed to the project’s development, research, and preparation for the NASA Space Apps Challenge.
 This project builds on work contributed by the Quantumions team. The current implementation and submission materials are on the **codex/jezero-traverse** branch.
 
 - [View this branch on GitHub](https://github.com/zoghby-ctrl/quantumions-martian-map/tree/codex/jezero-traverse)
