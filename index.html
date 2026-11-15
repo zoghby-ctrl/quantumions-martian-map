@@ -30,7 +30,7 @@
             <label><input type="checkbox" id="coverageLayer"> Interpolated elevation</label>
             <label><input type="checkbox" id="maskLayer" checked> Modeled exclusions</label>
             <label><input type="checkbox" id="sitesLayer" checked> Rover sites</label>
-            <label for="opacity">Overlay opacity <output id="opacityValue">45%</output></label><input type="range" min="10" max="100" value="45" id="opacity">
+            <details class="opacity-menu"><summary>Layer opacity</summary><div id="opacityControls"></div></details>
           </div></details>
         </div>
         <div class="map-frame">
@@ -71,7 +71,8 @@
       <p id="labStatus" role="status"></p><div id="diagnostics"></div></div></details></section>
 
     <section id="sources" class="sources"><div class="section-title"><p class="kicker">DATA &amp; ASSUMPTIONS</p><h2>Inside the map</h2></div>
-      <div id="sourceCards"></div><details class="model"><summary>Terrain model and resolution</summary><div id="modelText"></div></details>
+      <div id="sourceCards"></div><details class="model"><summary>Science at the rover sites</summary><div id="scienceNotes"></div></details>
+      <details class="model"><summary>Terrain model and resolution</summary><div id="modelText"></div></details>
     </section>
     <footer><strong>Quantumions / Marswalk</strong><span>Exploratory planning prototype · NASA Space Apps 2026</span></footer>
   </main>
