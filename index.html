@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en" data-runtime="browser">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1d211e">
+  <meta name="description" content="Explore Jezero crater and plan a hypothetical Marswalk with NASA orbital imagery, laser altimetry and Perseverance waypoints.">
+  <meta name="author" content="Quantumions. Codex-assisted code and text. Team logo generated with ChatGPT Image.">
+  <title>Marswalk · Jezero traverse planner</title>
+  <link rel="icon" href="quantumions.png"><link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#planner">Skip to traverse controls</a>
+  <header class="topbar"><div class="top-inner"><a class="identity" href="#map-section">
+    <span class="logo-wrap"><img src="quantumions.png" alt="Quantumions team logo"></span>
+    <span><strong>QUANTUMIONS</strong><small>AI-generated logo</small></span>
+  </a><nav aria-label="Workspace"><a href="#map-section">Map</a><a href="#briefing">Briefing</a><a href="#sources">Sources</a></nav>
+  <span id="service" class="service">Connecting</span></div></header>
+
+  <main><section class="title-block"><div><p class="kicker">MARSWALK <i></i> FIELD PLANNER</p>
+    <h1>Jezero traverse planner<span>.</span></h1>
+    <p class="intro">Plan a walk across the western delta with orbital imagery and laser altimetry.</p></div>
+    <a class="text-link" href="#sources">Mission data ↘</a></section>
+
+    <div class="workspace">
+      <section class="map-card" id="map-section" aria-label="Jezero map">
+        <div class="card-head"><div><p class="kicker">JEZERO CRATER</p><h2>Western delta</h2></div>
+          <details class="layers"><summary>Map layers</summary><div class="layer-menu">
+            <label><input type="checkbox" id="imagery" checked> CTX imagery</label>
+            <label><input type="checkbox" id="slopeLayer"> MOLA slope</label>
+            <label><input type="checkbox" id="coverageLayer"> Interpolated elevation</label>
+            <label><input type="checkbox" id="maskLayer" checked> Modeled exclusions</label>
+            <label><input type="checkbox" id="sitesLayer" checked> Rover sites</label>
+            <label for="opacity">Overlay opacity <output id="opacityValue">45%</output></label><input type="range" min="10" max="100" value="45" id="opacity">
+          </div></details>
+        </div>
+        <div class="map-frame">
+          <svg id="map" tabindex="0" role="img" aria-label="Orbital map of Jezero crater. Drag to pan or use arrow keys. Use coordinate controls to place endpoints.">
+            <defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(40)"><path d="M0 0V6" stroke="#ffb58f" stroke-width="2"/></pattern></defs>
+            <g id="scene"><image id="orbit" href="data/jezero-ctx.webp" preserveAspectRatio="none"/><g id="raster"></g><g id="tracks"></g><g id="markers"></g></g>
+          </svg>
+          <div class="north" aria-label="North is up"><span>↑</span>N</div>
+          <div class="zoom"><button id="zoomIn" aria-label="Zoom in">+</button><button id="zoomOut" aria-label="Zoom out">−</button><button id="fit" aria-label="Fit map to extent">⛶</button></div>
+          <div class="scale"><b id="scaleBar"></b><span id="scaleText">2 km</span></div>
+        </div>
+        <div class="map-note"><span class="legend"><i class="line"></i> A* traverse</span><span class="legend" id="labLegend" hidden><i class="lab-line"></i><span></span></span><span class="legend"><i class="hatch"></i> Exclusion</span><span id="cellReadout">Select an endpoint to place it on the map.</span></div>
+        <div class="overlay-key" id="overlayKey" hidden></div>
+      </section>
+
+      <aside class="plan-card" id="planner"><div class="card-head"><div><p class="kicker">TRAVERSE</p><h2>Route plan</h2></div><button id="reset" class="bare">Reset</button></div>
+        <div class="plan-content"><div id="endpoints"></div><button class="swap" id="swap">⇅ &nbsp; Swap endpoints</button>
+        <details class="coords"><summary>Enter coordinates</summary><div id="coordinateFields"></div><small>Degrees north and east. Routes snap to cell centers.</small></details>
+        <div class="priorities"><h3>Terrain priorities</h3>
+          <label for="slope">Slope <output id="slopeValue">35%</output></label><input type="range" id="slope" min="0" max="100" value="35">
+          <label for="gaps">Interpolated elevation <output id="gapValue">45%</output></label><input type="range" id="gaps" min="0" max="100" value="45">
+          <p>Exclusion margin receives the remaining <b id="marginValue">20%</b>.</p>
+        </div>
+        <button class="primary" id="run" disabled>Plan traverse <span>→</span></button>
+        <p id="status" role="status" aria-live="polite">Loading mission data…</p>
+        <button class="secondary" id="replay" hidden>Open recorded traverse</button></div>
+      </aside>
+
+      <section class="brief-card" id="briefing"><div class="card-head"><div><p class="kicker">FULL-GRID A*</p><h2>Route briefing</h2></div>
+        <button class="secondary" id="export" disabled>Export GeoJSON ↓</button></div>
+        <div id="briefBody"><p class="empty">Plan a traverse to see its distance and elevation profile.</p></div>
+      </section>
+    </div>
+
+    <section class="lab-card" id="lab"><details><summary><span><small>OPTIONAL EXPERIMENT</small>Quantum waypoint lab</span></summary>
+      <div class="inside"><p>Each directed leg between waypoints has a binary variable. A statevector simulator samples routes, then the planner scores complete paths against exact waypoint Dijkstra and full-grid A*.</p>
+      <div class="actions"><button id="compare" class="secondary" disabled>Run QAOA comparison</button><button id="cancel" class="bare" hidden>Cancel simulation</button></div>
+      <p id="labStatus" role="status"></p><div id="diagnostics"></div></div></details></section>
+
+    <section id="sources" class="sources"><div class="section-title"><p class="kicker">DATA &amp; ASSUMPTIONS</p><h2>Inside the map</h2></div>
+      <div id="sourceCards"></div><details class="model"><summary>Terrain model and resolution</summary><div id="modelText"></div></details>
+    </section>
+    <footer><strong>Quantumions / Marswalk</strong><span>Exploratory planning prototype · NASA Space Apps 2026</span></footer>
+  </main>
+  <script src="app.js" defer></script><script src="map.js" defer></script><script src="browser-router.js" defer></script>
+</body></html>

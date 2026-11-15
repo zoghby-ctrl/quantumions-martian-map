@@ -1,0 +1,51 @@
+{
+  "dataset_id": "jezero-mola-ctx-v1-a1e95a4313",
+  "retrieved_utc": "2026-11-15",
+  "bbox_edges_wsen": [
+    77.265625,
+    18.3359375,
+    77.640625,
+    18.5546875
+  ],
+  "grid_shape": [
+    28,
+    48
+  ],
+  "coordinates": "Planetocentric latitude, east-positive longitude in degrees on Mars. Geographic bounds are outer pixel edges. Each route vertex is a MOLA cell center.",
+  "geometry": "Local equirectangular distances on a 3396000 m sphere (MOLA label radius), standard parallel at the crop midpoint. Regional approximation.",
+  "sources": [
+    {
+      "name": "MGS / MOLA topography",
+      "url": "https://pds-geosciences.wustl.edu/mgs/urn-nasa-pds-mgs_mola_topography_derived/meg128/megt44n000hb.img",
+      "label": "https://pds-geosciences.wustl.edu/mgs/urn-nasa-pds-mgs_mola_topography_derived/meg128/megt44n000hb.lbl",
+      "credit": "NASA GSFC / MGS MOLA Science Team, PDS Geosciences Node",
+      "processing": "MEGT44N000HB v2.0. Native 1/128 degree median elevation, integer meters above the GMM3 areoid. Exact grid crop, no resampling. PDS fills unsounded bins by interpolation."
+    },
+    {
+      "name": "MGS / MOLA shot counts",
+      "url": "https://pds-geosciences.wustl.edu/mgs/urn-nasa-pds-mgs_mola_topography_derived/meg128/megc44n000hb.img",
+      "label": "https://pds-geosciences.wustl.edu/mgs/urn-nasa-pds-mgs_mola_topography_derived/meg128/megc44n000hb.lbl",
+      "credit": "NASA GSFC / MGS MOLA Science Team, PDS Geosciences Node",
+      "processing": "MEGC44N000HB v2.0. Co-registered native crop. Zero observations indicates a product-interpolated elevation. Counts are neither confidence intervals nor hazard measurements."
+    },
+    {
+      "name": "MRO / CTX orbital mosaic",
+      "url": "https://planetarymaps.usgs.gov/mosaic/mars2020_trn/CTX/JEZ_ctx_B_soc_008_orthoMosaic_6m_Eqc_latTs0_lon0.tif",
+      "label": "https://doi.org/10.5066/P906QQT8",
+      "credit": "NASA / JPL-Caltech / MSSS / USGS Astrogeology",
+      "processing": "Mars 2020 TRN CTX 6 m orthoimage. Cropped in source EQC meters, area-averaged to 1344 by 784, valid pixels stretched at 1st and 99th percentiles. Zero source DN is nodata, masked output is transparent."
+    },
+    {
+      "name": "Mars 2020 / Perseverance waypoints",
+      "url": "https://mars.nasa.gov/mmgis-maps/M20/Layers/json/M20_waypoints.json",
+      "label": "https://science.nasa.gov/mission/mars-2020-perseverance/location-map/",
+      "credit": "NASA / JPL-Caltech, Mars 2020 mission mapping team",
+      "processing": "Three end-of-drive point records selected by sol and RMC. Coordinates retained as published. Suggested walk connects snapped grid centers independently of rover history."
+    }
+  ],
+  "sha256": {
+    "jezero.json": "a1e95a431305eedcd4280d723046afeada7983ddfa7a2031e49416c63c17c335",
+    "jezero-ctx.webp": "7f1dbed9e160b317b7af470e549996e028836e144ddae648cf389d03d4974c15"
+  },
+  "upstream_ctx_sha256": "842b457afee7c2672022b66e3f60be836c6d52e99474015bfd9ced60099b8615"
+}
