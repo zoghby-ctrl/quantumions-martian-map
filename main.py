@@ -1,294 +1,298 @@
-"""FastAPI wrapper for the Mars terrain router."""
+"""Marswalk FastAPI application. Run with python main.py (one worker)."""
+
 from __future__ import annotations
 
+import logging
 import math
+import os
 import time
+import uuid
+from functools import lru_cache
+from importlib.util import find_spec
 from pathlib import Path
-from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+import jezero
 import mars_router as router
+from quantum_jobs import LIMIT_SECONDS, jobs
 
-
-# GeoJSON bbox order is west, south, east, north. This local demo window
-# contains the Jezero coordinates used by the Marswalk preset. Terrain remains
-# synthetic and is not a real elevation/radiation dataset.
-MARS_BBOX = (77.35, 18.35, 77.75, 18.65)
-GRID_SIZE = 20
-TERRAIN_SEED = 7
-# Keep the interactive demo responsive on a laptop. The previous defaults
-# (p=2, 150 COBYLA iterations, 8,192 shots and exhaustive QUBO verification)
-# made a single statevector request too expensive for an interactive demo.
-# This remains a real QAOA run; the smaller search budget makes its heuristic
-# quality more variable, which the UI already reports against the A* baseline.
-QUANTUM_CONFIG = router.QuantumConfig(
-    n_waypoints=4,
-    max_qubits=6,
-    reps=1,
-    maxiter=8,
-    shots=1024,
-    penalty_factor=2.0,
-    verify=False,
-)
 STATIC_DIR = Path(__file__).parent / "static"
-
-
-class TerrainWeights(BaseModel):
-    slope: float = Field(ge=0.0, le=1.0)
-    radiation: float = Field(ge=0.0, le=1.0)
-
-    class Config:
-        extra = "forbid"
-
-
-class RouteRequest(BaseModel):
-    # Input order is [latitude, longitude]. Tuple types enforce exactly two values.
-    start: tuple[float, float]
-    end: tuple[float, float]
-    weights: TerrainWeights
-
-    class Config:
-        extra = "forbid"
-
-
-app = FastAPI(title="Mars Router API", version="1.0.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
-)
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-
-def latlon_to_cell(latitude: float, longitude: float, size: int = GRID_SIZE) -> router.Cell:
-    """Map [lat, lon] coordinates onto the nearest row/column in the grid."""
-    west, south, east, north = MARS_BBOX
-    if not (math.isfinite(latitude) and math.isfinite(longitude)):
-        raise HTTPException(status_code=422, detail="coordinates must be finite numbers")
-    if not (south <= latitude <= north and west <= longitude <= east):
-        raise HTTPException(
-            status_code=422,
-            detail=f"coordinates must fall inside bbox [west, south, east, north]={list(MARS_BBOX)}",
-        )
-    row = round((north - latitude) / (north - south) * (size - 1))
-    col = round((longitude - west) / (east - west) * (size - 1))
-    return int(row), int(col)
-
-
-def cell_to_latlon(cell: router.Cell, size: int = GRID_SIZE) -> list[float]:
-    """Return the [longitude, latitude] center of a grid cell for GeoJSON."""
-    west, south, east, north = MARS_BBOX
-    row, col = cell
-    latitude = north - row / (size - 1) * (north - south)
-    longitude = west + col / (size - 1) * (east - west)
-    return [longitude, latitude]
-
-
-def cost_model_for(weights: TerrainWeights) -> router.CostModel:
-    """Use the supplied slope/radiation shares and assign the remainder to craters."""
-    slope, radiation = float(weights.slope), float(weights.radiation)
-    if not (math.isfinite(slope) and math.isfinite(radiation)):
-        raise HTTPException(status_code=422, detail="weights must be finite numbers")
-    if slope + radiation > 1.0 + 1e-12:
-        raise HTTPException(
-            status_code=422,
-            detail="slope and radiation weights must sum to at most 1.0",
-        )
-    return router.CostModel(
-        w_slope=slope,
-        w_rad=radiation,
-        w_crater=max(0.0, 1.0 - slope - radiation),
+QUANTUM_CONFIG = router.QuantumConfig(verify=True)
+app = FastAPI(title="Marswalk · Jezero traverse planner", version="2.0")
+logger = logging.getLogger("uvicorn.error")
+origins = os.environ.get("MARSWALK_CORS_ORIGINS", "")
+if origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins.split(","),
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["Content-Type"],
     )
 
 
-def _feature(name: str, path: list[router.Cell], metrics: router.PathMetrics,
-             duration_ms: float | None, status: str) -> dict[str, Any]:
+class TerrainWeights(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, frozen=True)
+    slope: float = Field(ge=0, le=1)
+    interpolation: float = Field(ge=0, le=1)
+
+
+class RouteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    start: tuple[float, float]
+    end: tuple[float, float]
+    weights: TerrainWeights
+    dataset_id: str = jezero.DATASET_ID
+
+
+@app.middleware("http")
+async def request_identity(request: Request, call_next):
+    request.state.request_id = uuid.uuid4().hex
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request.state.request_id
+    return response
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_payload(request, error):
+    # Avoid echoing nonfinite JSON values through the response encoder.
+    messages = [
+        ".".join(map(str, issue["loc"][1:])) + " " + issue["msg"]
+        for issue in error.errors()
+    ]
+    return JSONResponse(
+        {
+            "code": "invalid_inputs",
+            "detail": ". ".join(messages),
+            "request_id": request.state.request_id,
+        },
+        status_code=422,
+    )
+
+
+@app.exception_handler(HTTPException)
+async def handled_error(request, error):
+    return JSONResponse(
+        {"detail": error.detail, "request_id": request.state.request_id},
+        status_code=error.status_code,
+    )
+
+
+def cost_model_for(weights):
+    remaining = 1.0 - weights.slope - weights.interpolation
+    if remaining < -1e-12:
+        raise HTTPException(422, "Terrain priority shares must sum to at most 1.0")
+    # Historical engine fields w_rad/w_crater are generic weighted raster channels here.
+    return router.CostModel(
+        w_slope=weights.slope,
+        w_rad=weights.interpolation,
+        w_crater=max(0, remaining),
+        cell_size_m=1000,
+        max_grade=jezero.MAX_GRADE,
+    )
+
+
+def scenario(request):
+    if request.dataset_id != jezero.DATASET_ID:
+        raise HTTPException(409, "Dataset version changed. Reload the map.")
+    model = cost_model_for(request.weights)
+    try:
+        start, end = (
+            jezero.latlon_to_cell(*point) for point in (request.start, request.end)
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    terrain = jezero.terrain_for(model)
+    if start == end:
+        raise HTTPException(422, "Choose two different routing cells")
+    if not all(terrain.passable(c) for c in (start, end)):
+        raise HTTPException(422, "An endpoint is inside a modeled exclusion")
+    return model, start, end
+
+
+@lru_cache(maxsize=128)
+def baseline(dataset_id, model, start, end):
+    terrain = jezero.terrain_for(model)
+    before = time.perf_counter()
+    result = router.astar(terrain, start, end)
+    elapsed = (time.perf_counter() - before) * 1000
+    if result is None:
+        raise HTTPException(
+            422, "No route connects those cells under the grade and exclusion rules"
+        )
+    return tuple(result.path), elapsed, result.cost
+
+
+def feature(name, path, stats, elapsed, status):
     return {
         "type": "Feature",
         "properties": {
             "solver": name,
-            "total_cost": round(float(metrics.total_cost), 6),
-            "energy": round(float(metrics.energy), 6),
-            "hazard_score": round(float(metrics.hazard_score), 6),
-            "steps": int(metrics.steps),
-            "distance_cells": round(float(metrics.distance_cells), 6),
-            "execution_time_ms": None if duration_ms is None else round(float(duration_ms), 3),
             "status": status,
+            **stats,
+            "execution_time_ms": None if elapsed is None else round(elapsed, 3),
         },
         "geometry": {
             "type": "LineString",
-            "coordinates": [cell_to_latlon(cell) for cell in path],
+            "coordinates": [jezero.cell_to_lonlat(c) for c in path],
         },
     }
+
+
+def make_result(request, quantum=False):
+    model, start, end = scenario(request)
+    terrain = jezero.terrain_for(model)
+    path, elapsed, optimal_cost = baseline(request.dataset_id, model, start, end)
+    stats = jezero.validate(path, start, end, terrain, request.dataset_id)
+    if not math.isclose(stats["total_cost"], optimal_cost):
+        raise RuntimeError("Inconsistent A* cost on validated route")
+    features = [feature("classical_astar", path, stats, elapsed, "optimal_on_grid")]
+    diagnostics = None
+    if quantum:
+        before = time.perf_counter()
+        try:
+            q = router.run_quantum(terrain, start, end, QUANTUM_CONFIG)
+        except Exception as exc:
+            logger.exception("Quantum comparison failed")
+            q = {"status": type(exc).__name__, "details": {}, "path": None}
+        diagnostics = dict(q["details"])
+        qpath = q.get("path")
+        status = q["status"]
+        try:
+            if not qpath:
+                raise ValueError(diagnostics.get("fallback_reason") or status)
+            qstats = jezero.validate(qpath, start, end, terrain, request.dataset_id)
+            if qstats["total_cost"] < optimal_cost - 1e-8:
+                raise ValueError(
+                    "Waypoint route violates the full-grid optimality invariant"
+                )
+        except (ValueError, IndexError, TypeError) as exc:
+            diagnostics["fallback_reason"] = str(exc)
+            logger.warning("Using A* fallback: %s", exc)
+            qpath, qstats, status = path, stats, "fallback_classical_astar"
+        name = {
+            "fallback_classical_astar": "classical_astar_fallback",
+            "fallback_exact_waypoint_graph": "exact_waypoint_dijkstra",
+        }.get(status, "qaoa_waypoint_subgraph")
+        diagnostics["total_ms"] = round((time.perf_counter() - before) * 1000, 3)
+        diagnostics["grid_gap_percent"] = round(
+            100 * (qstats["total_cost"] / optimal_cost - 1), 4
+        )
+        features.append(
+            feature(name, qpath, qstats, q.get("execution_time_ms"), status)
+        )
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "meta": {
+            "dataset_id": request.dataset_id,
+            "input": request.model_dump(),
+            "start_cell": start,
+            "end_cell": end,
+            "coordinate_system": jezero.MANIFEST["coordinates"],
+            "geometry_model": jezero.MANIFEST["geometry"],
+            "bbox_edges_wsen": jezero.BBOX,
+            "spacing_m_east_north": [jezero.DX, jezero.DY],
+            "sources": jezero.MANIFEST["sources"],
+            "assumptions": jezero.ASSUMPTIONS,
+            "quantum": diagnostics,
+            "ai_disclosure": "Codex-assisted processing and routing code. Elevations, shot counts, imagery and waypoints are mission products.",
+        },
+    }
+
+
+def quantum_available():
+    return all(
+        find_spec(name) is not None
+        for name in ("qiskit", "qiskit_algorithms", "qiskit_optimization")
+    )
 
 
 @app.get("/api/health")
-def health() -> dict[str, Any]:
-    """Report service availability and coordinate coverage."""
-    west, south, east, north = MARS_BBOX
-    demo_start = latlon_to_cell(18.44, 77.45)
-    demo_end = latlon_to_cell(18.52, 77.62)
-    terrain = router.generate_terrain(
-        size=GRID_SIZE,
-        seed=TERRAIN_SEED,
-        start=demo_start,
-        goal=demo_end,
-    )
+def health():
+    available = quantum_available()
     return {
         "status": "ok",
-        "bbox": [west, south, east, north],
-        "grid_size": GRID_SIZE,
-        "solvers": ["weighted_astar", "qaoa_waypoint_subgraph"],
-        "terrain": {
-            "crater_cells": [
-                [int(r), int(c)] for r, c in zip(*terrain.crater_mask.nonzero())
-            ],
-            "hazard_grid": [
-                [round(float(value), 4) for value in row]
-                for row in terrain.hazard.tolist()
-            ],
-        },
+        "dataset_id": jezero.DATASET_ID,
+        "bbox": jezero.BBOX,
+        "solvers": ["weighted_astar"]
+        + (["qaoa_waypoint_subgraph"] if available else []),
+        "quantum_packages_present": available,
+        "quantum_limit_seconds": LIMIT_SECONDS,
     }
 
 
-@app.get("/")
-def frontend() -> FileResponse:
-    """Serve the local Marswalk frontend."""
-    return FileResponse(STATIC_DIR / "index.html")
+@app.get("/api/terrain")
+def terrain():
+    return {
+        "dataset_id": jezero.DATASET_ID,
+        **jezero.DATA,
+        "max_grade": jezero.MAX_GRADE,
+        "slope_percent": (100 * jezero.GRADE).round(2).tolist(),
+        "excluded": jezero.EXCLUDED.astype(int).tolist(),
+        "dx": jezero.DX,
+        "dy": jezero.DY,
+        "manifest": jezero.MANIFEST,
+        "assumptions": jezero.ASSUMPTIONS,
+    }
 
 
 @app.post("/api/route")
-def route(request: RouteRequest) -> dict[str, Any]:
-    """Run weighted A* and QAOA, returning both paths as GeoJSON features."""
-    start = latlon_to_cell(*request.start)
-    goal = latlon_to_cell(*request.end)
-    if start == goal:
-        raise HTTPException(status_code=422, detail="start and end map to the same terrain cell")
+def route(request: RouteRequest):
+    return make_result(request)
 
-    model = cost_model_for(request.weights)
-    terrain = router.generate_terrain(
-        size=GRID_SIZE,
-        seed=TERRAIN_SEED,
-        start=start,
-        goal=goal,
-        model=model,
-    )
 
-    classical_started = time.perf_counter()
-    classical_result = router.astar(terrain, start, goal)
-    classical_duration_ms = (time.perf_counter() - classical_started) * 1_000.0
-    if classical_result is None:
-        raise HTTPException(status_code=422, detail="no classical route exists for these coordinates")
-    classical_metrics = router.evaluate_path(terrain, classical_result.path)
-
-    quantum_fallback_reason = None
+@app.post("/api/quantum", status_code=202)
+def compare(request: RouteRequest):
+    model, start, end = scenario(request)
+    baseline(request.dataset_id, model, start, end)
+    if not quantum_available():
+        raise HTTPException(
+            503,
+            "Qiskit simulator packages are unavailable. The classical route is ready.",
+        )
     try:
-        quantum_result = router.run_quantum(terrain, start, goal, QUANTUM_CONFIG)
-    except Exception as exc:  # Keep a valid classical response if the optional solver errors.
-        quantum_result = {
-            "path": None,
-            "execution_time_ms": None,
-            "status": f"error:{type(exc).__name__}",
-        }
-    if not isinstance(quantum_result, dict):
-        quantum_result = {"path": None, "execution_time_ms": None, "status": "error:invalid_solver_result"}
-    quantum_path = quantum_result.get("path")
-    quantum_status = quantum_result.get("status", "unknown")
-    quantum_fallback_reason = (quantum_result.get("details") or {}).get("fallback_reason")
-
-    # QAOA output is only accepted after endpoint, collision and edge checks.
-    # The local A* result guarantees a valid HTTP 200 fallback for this request.
-    if quantum_path is not None:
-        try:
-            if (len(quantum_path) < 2 or quantum_path[0] != start
-                    or quantum_path[-1] != goal
-                    or any(not terrain.passable(cell) for cell in quantum_path)):
-                raise ValueError("QAOA path has invalid endpoints or enters an obstacle")
-            quantum_metrics = router.evaluate_path(terrain, quantum_path)
-        except Exception:
-            quantum_fallback_reason = "QAOA returned an invalid route"
-            quantum_path = None
-    else:
-        quantum_fallback_reason = quantum_fallback_reason or f"QAOA returned no valid route ({quantum_status})"
-
-    if quantum_path is None:
-        quantum_path = classical_result.path
-        quantum_metrics = classical_metrics
-        quantum_status = "fallback_classical_astar"
-
-    classical_feature = _feature(
-        "classical_astar", classical_result.path, classical_metrics,
-        classical_duration_ms, "optimal_on_grid",
-    )
-    quantum_feature = _feature(
-        "classical_astar_fallback" if quantum_status == "fallback_classical_astar"
-        else "qaoa_waypoint_subgraph",
-        quantum_path, quantum_metrics,
-        quantum_result.get("execution_time_ms"), quantum_status,
-    )
-    cost_delta = float(quantum_metrics.total_cost - classical_metrics.total_cost)
-    is_fallback = quantum_status.startswith("fallback_")
-    if is_fallback and cost_delta < -1e-9:
-        lower_cost_solver = "waypoint_fallback"
-    elif cost_delta < -1e-9:
-        lower_cost_solver = "quantum"
-    elif cost_delta > 1e-9:
-        lower_cost_solver = "classical"
-    else:
-        lower_cost_solver = "equal"
-    comparison = {
-        "cost_delta_quantum_minus_classical": round(cost_delta, 6),
-        "cost_delta_percent": round(100.0 * cost_delta / classical_metrics.total_cost, 3),
-        "lower_cost_solver": lower_cost_solver,
-        "hazard_delta_quantum_minus_classical": round(
-            float(quantum_metrics.hazard_score - classical_metrics.hazard_score), 6
-        ),
-        "step_delta_quantum_minus_classical": int(quantum_metrics.steps - classical_metrics.steps),
-    }
-
+        job_id, cached = jobs.submit(request.model_dump())
+    except RuntimeError as exc:
+        raise HTTPException(429, str(exc)) from exc
     return {
-        "type": "FeatureCollection",
-        "features": [classical_feature, quantum_feature],
-        "metrics": {
-            "classical": classical_feature["properties"],
-            "quantum": quantum_feature["properties"],
-            "comparison": comparison,
-        },
-        "meta": {
-            "bbox": list(MARS_BBOX),
-            "grid_size": GRID_SIZE,
-            "start_cell": list(start),
-            "end_cell": list(goal),
-            "weights": {
-                "slope": model.w_slope,
-                "radiation": model.w_rad,
-                "crater": model.w_crater,
-            },
-            "quantum_status": quantum_status,
-            "quantum_fallback_reason": quantum_fallback_reason,
-            "crater_cells": [
-                [int(r), int(c)]
-                for r, c in zip(*terrain.crater_mask.nonzero())
-            ],
-            "hazard_grid": [
-                [round(float(value), 4) for value in row]
-                for row in terrain.hazard.tolist()
-            ],
-        },
+        "job_id": job_id,
+        "status": "complete" if cached else "running",
+        "cached": cached,
+        "limit_seconds": LIMIT_SECONDS,
     }
 
 
-app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="site-assets")
+@app.get("/api/quantum/{job_id}")
+def get_job(job_id: str):
+    return jobs.read(job_id) or missing_job()
 
+
+@app.delete("/api/quantum/{job_id}")
+def cancel_job(job_id: str):
+    return jobs.cancel(job_id) or missing_job()
+
+
+def missing_job():
+    raise HTTPException(404, "Unknown or expired comparison")
+
+
+@app.get("/")
+def frontend():
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/", StaticFiles(directory=STATIC_DIR), name="assets")
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=False)
+    uvicorn.run(
+        app, host=os.getenv("HOST", "127.0.0.1"), port=int(os.getenv("PORT", "8000"))
+    )

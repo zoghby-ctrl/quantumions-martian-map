@@ -1,135 +1,114 @@
-from __future__ import annotations
+"""Original API coverage adapted to the fixed dataset and opt-in quantum contract."""
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+import jezero
 import main
 import mars_router as router
 
-
 client = TestClient(main.app)
+REQUEST = {
+    "start": [18.44, 77.45],
+    "end": [18.52, 77.62],
+    "weights": {"slope": 0.25, "interpolation": 0.45},
+}
 
 
-def test_health_endpoint_reports_service_and_bbox() -> None:
-    response = client.get("/api/health")
-
-    assert response.status_code == 200
-    body = response.json()
+def test_health_endpoint_reports_service_and_bbox(monkeypatch):
+    monkeypatch.setattr(main, "quantum_available", lambda: False)
+    body = client.get("/api/health").json()
     assert body["status"] == "ok"
-    assert body["bbox"] == [77.35, 18.35, 77.75, 18.65]
-    assert set(body["solvers"]) == {"weighted_astar", "qaoa_waypoint_subgraph"}
-    assert body["terrain"]["crater_cells"]
-    assert len(body["terrain"]["hazard_grid"]) == 20
+    assert body["bbox"] == [77.265625, 18.3359375, 77.640625, 18.5546875]
+    assert body["solvers"] == ["weighted_astar"]
+    grid = client.get("/api/terrain").json()
+    assert body["dataset_id"] == grid["dataset_id"]
+    assert sum(map(sum, grid["excluded"])) > 0
+    assert client.post("/api/quantum", json=REQUEST).status_code == 503
 
 
-def test_root_serves_the_marswalk_ui() -> None:
+def test_root_serves_the_marswalk_ui():
     response = client.get("/")
-
     assert response.status_code == 200
-    assert "Load Demo Marswalk" in response.text
-    assert "What does the quantum part do?" in response.text
+    assert "Plan traverse" in response.text
+    assert "Quantum waypoint lab" in response.text
+    for asset in (
+        "app.js",
+        "map.js",
+        "styles.css",
+        "data/jezero-ctx.webp",
+        "quantumions.png",
+    ):
+        assert client.get("/" + asset).status_code == 200
 
 
-def test_route_endpoint_returns_two_clear_geojson_paths(monkeypatch: pytest.MonkeyPatch) -> None:
-    def deterministic_subgraph_solver(terrain, start, goal, cfg, connectivity=8):
-        """Use the exact waypoint-graph reference so the API test needs no Qiskit runtime."""
-        graph = router.build_waypoint_graph(terrain, start, goal, cfg, connectivity)
-        result = router.dijkstra_graph(graph)
-        assert result is not None
-        path = graph.stitch(result[0])
+def test_route_endpoint_returns_two_clear_geojson_paths(monkeypatch):
+    # Keep the teammate's deterministic graph integration check, separate from a real simulator run.
+    def exact(terrain, start, end, cfg):
+        graph = router.build_waypoint_graph(terrain, start, end, cfg)
+        nodes, cost = router.dijkstra_graph(graph)
         return {
-            "path": path,
-            "metrics": router.evaluate_path(terrain, path),
-            "execution_time_ms": 1.0,
-            "status": "test_subgraph_path",
+            "path": graph.stitch(nodes),
+            "execution_time_ms": 1,
+            "status": "fallback_exact_waypoint_graph",
+            "details": {
+                "exact_waypoint_graph_cost": cost,
+                "fallback_reason": "Deterministic test reference",
+            },
         }
 
-    monkeypatch.setattr(router, "run_quantum", deterministic_subgraph_solver)
-    request = {
-        "start": [18.44, 77.45],
-        "end": [18.52, 77.62],
-        "weights": {"slope": 0.25, "radiation": 0.45},
-    }
-
-    response = client.post("/api/route", json=request)
-
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["type"] == "FeatureCollection"
-    assert [feature["properties"]["solver"] for feature in body["features"]] == [
-        "classical_astar",
-        "qaoa_waypoint_subgraph",
+    monkeypatch.setattr(router, "run_quantum", exact)
+    live = client.post("/api/route", json=REQUEST)
+    assert live.status_code == 200
+    assert [f["properties"]["solver"] for f in live.json()["features"]] == [
+        "classical_astar"
     ]
-    assert set(body["metrics"]) == {"classical", "quantum", "comparison"}
-    assert body["metrics"]["comparison"]["lower_cost_solver"] in {
-        "classical", "quantum", "equal"
-    }
-
-    start = tuple(body["meta"]["start_cell"])
-    goal = tuple(body["meta"]["end_cell"])
-    model = main.cost_model_for(main.TerrainWeights(**request["weights"]))
-    terrain = router.generate_terrain(
-        size=main.GRID_SIZE,
-        seed=main.TERRAIN_SEED,
-        start=start,
-        goal=goal,
-        model=model,
-    )
-
-    assert len(body["features"]) == 2
-    for feature in body["features"]:
-        geometry = feature["geometry"]
-        assert geometry["type"] == "LineString"
-        assert len(geometry["coordinates"]) >= 2
+    body = main.make_result(main.RouteRequest(**REQUEST), quantum=True)
+    assert body["type"] == "FeatureCollection"
+    assert [f["properties"]["solver"] for f in body["features"]] == [
+        "classical_astar",
+        "exact_waypoint_dijkstra",
+    ]
+    assert body["meta"]["quantum"]["fallback_reason"] == "Deterministic test reference"
+    for f in body["features"]:
         cells = [
-            main.latlon_to_cell(latitude, longitude)
-            for longitude, latitude in geometry["coordinates"]
+            jezero.latlon_to_cell(lat, lon) for lon, lat in f["geometry"]["coordinates"]
         ]
-        assert cells[0] == start
-        assert cells[-1] == goal
-        assert all(terrain.passable(cell) for cell in cells)
-        assert all(terrain.edge(a, b) is not None for a, b in zip(cells, cells[1:]))
+        assert cells[0] == tuple(body["meta"]["start_cell"]) and cells[-1] == tuple(
+            body["meta"]["end_cell"]
+        )
+        for (r, c), (nr, nc) in zip(cells, cells[1:]):
+            assert max(abs(r - nr), abs(c - nc)) == 1
+            assert not jezero.EXCLUDED[nr, nc]
+            if r != nr and c != nc:
+                assert not (jezero.EXCLUDED[r, nc] or jezero.EXCLUDED[nr, c])
 
 
-def test_route_rejects_coordinates_outside_bbox() -> None:
-    response = client.post(
-        "/api/route",
-        json={
-            "start": [91, 0],
-            "end": [0, 0],
-            "weights": {"slope": 0.25, "radiation": 0.45},
-        },
+def test_route_rejects_coordinates_outside_bbox():
+    assert (
+        client.post("/api/route", json={**REQUEST, "start": [91, 0]}).status_code == 422
     )
 
-    assert response.status_code == 422
 
-
-def test_route_rejects_weight_shares_above_one_hundred_percent() -> None:
-    response = client.post(
+def test_route_rejects_weight_shares_above_one_hundred_percent():
+    r = client.post(
         "/api/route",
-        json={
-            "start": [18.44, 77.45],
-            "end": [18.52, 77.62],
-            "weights": {"slope": 0.75, "radiation": 0.75},
-        },
+        json={**REQUEST, "weights": {"slope": 0.75, "interpolation": 0.75}},
     )
-
-    assert response.status_code == 422
-    assert "sum to at most 1.0" in response.json()["detail"]
+    assert r.status_code == 422 and "sum to at most" in r.json()["detail"]
 
 
-def test_cost_weights_cover_zero_and_full_share_without_overflow() -> None:
-    zero = main.cost_model_for(main.TerrainWeights(slope=0, radiation=0))
-    full = main.cost_model_for(main.TerrainWeights(slope=1, radiation=0))
+def test_cost_weights_cover_zero_and_full_share_without_overflow():
+    zero = main.cost_model_for(main.TerrainWeights(slope=0, interpolation=0))
+    full = main.cost_model_for(main.TerrainWeights(slope=1, interpolation=0))
     assert (zero.w_slope, zero.w_rad, zero.w_crater) == (0, 0, 1)
     assert (full.w_slope, full.w_rad, full.w_crater) == (1, 0, 0)
-
     with pytest.raises(HTTPException):
-        main.cost_model_for(main.TerrainWeights(slope=0.75, radiation=0.75))
+        main.cost_model_for(main.TerrainWeights(slope=0.75, interpolation=0.75))
 
 
-def test_cors_allows_local_frontend_preflight() -> None:
+def test_cors_same_origin_by_default():
     response = client.options(
         "/api/route",
         headers={
@@ -137,6 +116,4 @@ def test_cors_allows_local_frontend_preflight() -> None:
             "Access-Control-Request-Method": "POST",
         },
     )
-
-    assert response.status_code == 200
-    assert response.headers["access-control-allow-origin"] == "*"
+    assert "access-control-allow-origin" not in response.headers

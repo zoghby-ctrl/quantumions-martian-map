@@ -17,7 +17,7 @@ Why a waypoint graph for the quantum side?
     4-node waypoint overlay is capped at 6 directed-arc variables to keep the
     demo simulator small. Edge weights come from real A* legs on the full
     terrain, so the quantum route can be expanded and scored on the grid.
-    Quantum runtime therefore does not depend on grid size.
+    The circuit size is capped. Classical leg construction still depends on grid size.
 
 Dependencies
     required : numpy
@@ -68,7 +68,7 @@ class CostModel:
     w_rad: float = 0.45          # hazard mix: radiation exposure
     w_crater: float = 0.30       # hazard mix: proximity to crater rims
     w_slope: float = 0.25        # hazard mix: slope
-    cell_size_m: float = 100.0   # metres per grid cell
+    cell_size_m: float = 100.0   # reference length used to normalize scores
 
 
 @dataclass(frozen=True)
@@ -92,16 +92,19 @@ class QuantumConfig:
 class Terrain:
     """Grid terrain with cached per-cell fields and edge-cost evaluation."""
 
-    def __init__(self, elevation, radiation, crater_prox, crater_mask, craters, model: CostModel):
+    def __init__(self, elevation, radiation, crater_prox, crater_mask, craters, model: CostModel,
+                 spacing_m=None):
         self.model = model
         self.size = elevation.shape[0]
+        self.rows, self.cols = elevation.shape
+        self.dy, self.dx = spacing_m or (model.cell_size_m, model.cell_size_m)
         self.elevation = elevation          # metres
         self.radiation = radiation          # 0..1
         self.crater_prox = crater_prox      # 0..1 (1 inside / on crater)
         self.crater_mask = crater_mask      # True = impassable
         self.craters = craters              # [(row, col, radius_cells)]
 
-        gy, gx = np.gradient(elevation, model.cell_size_m)
+        gy, gx = np.gradient(elevation, self.dy, self.dx)
         self.grade = np.hypot(gx, gy)       # local rise/run, dimensionless
         slope_norm = np.clip(self.grade / model.max_grade, 0.0, 1.0)
         self.hazard = np.clip(
@@ -122,18 +125,19 @@ class Terrain:
     # -- graph interface ------------------------------------------------------
     def passable(self, c: Cell) -> bool:
         r, k = c
-        return 0 <= r < self.size and 0 <= k < self.size and not self._x[r][k]
+        return 0 <= r < self.rows and 0 <= k < self.cols and not self._x[r][k]
 
-    def edge(self, a: Cell, b: Cell) -> Optional[tuple[float, float, float]]:
+    def edge(self, a: Cell, b: Cell, connectivity: int = 8) -> Optional[tuple[float, float, float]]:
         """Return (energy, hazard, weighted_cost) for the move a->b, or None if blocked."""
-        m, n = self.model, self.size
+        m = self.model
         (r1, c1), (r2, c2) = a, b
-        if not (0 <= r2 < n and 0 <= c2 < n) or self._x[r2][c2]:
-            return None
         dr, dc = r2 - r1, c2 - c1
+        if (max(abs(dr), abs(dc)) != 1 or (connectivity == 4 and dr and dc)
+                or not self.passable(a) or not self.passable(b)):
+            return None
         if dr and dc and (self._x[r1][c2] or self._x[r2][c1]):
             return None                                   # no cutting crater corners
-        dist = SQRT2 if (dr and dc) else 1.0
+        dist = math.hypot(dr * self.dy, dc * self.dx) / m.cell_size_m
         dz = self._z[r2][c2] - self._z[r1][c1]
         if abs(dz) / (dist * m.cell_size_m) > m.max_grade:
             return None                                   # too steep
@@ -223,14 +227,8 @@ def _build_terrain(size, base, hot, craters, model: CostModel) -> Terrain:
 def generate_terrain(size: int = 10, seed: int = 7, start: Optional[Cell] = None,
                      goal: Optional[Cell] = None, model: CostModel = CostModel(),
                      crater_coverage: float = 0.12) -> Terrain:
-    """Synthetic Martian terrain. Deterministic for a given (size, seed).
-
-    Guarantees start and goal are passable and mutually reachable (craters are
-    dropped, newest first, until a route exists).
-    """
+    """Synthetic CLI fixture. Endpoints never alter its physical fields."""
     rng = np.random.default_rng(seed)
-    start = start or (0, 0)
-    goal = goal or (size - 1, size - 1)
 
     base = _smooth_noise(rng, size)
     rows, cols = np.mgrid[0:size, 0:size].astype(float)
@@ -246,19 +244,13 @@ def generate_terrain(size: int = 10, seed: int = 7, start: Optional[Cell] = None
             break
         r = max(0.9, rng.uniform(0.04, 0.09) * size)
         cr, cc = rng.uniform(0, size - 1, 2)
-        if math.hypot(cr - start[0], cc - start[1]) < r + 1.5 or \
-           math.hypot(cr - goal[0], cc - goal[1]) < r + 1.5:
-            continue                                    # keep start/goal clear
+        # Preserve the original CLI's default corner launch and arrival sites.
+        if min(math.hypot(cr, cc), math.hypot(cr-size+1, cc-size+1)) < r + 1.5:
+            continue
         craters.append((float(cr), float(cc), float(r)))
         covered |= np.hypot(rows - cr, cols - cc) <= r
 
-    while True:
-        terrain = _build_terrain(size, base, hot, craters, model)
-        if terrain.passable(start) and terrain.passable(goal) and terrain.reachable(start, goal):
-            return terrain
-        if not craters:
-            raise RuntimeError("Terrain too steep: no route between start and goal. Try another seed.")
-        craters = craters[:-1]
+    return _build_terrain(size, base, hot, craters, model)
 
 
 # =============================================================================
@@ -285,7 +277,10 @@ def astar(terrain: Terrain, start: Cell, goal: Cell, connectivity: int = 8) -> O
 
     def h(c: Cell) -> float:
         dr, dc = abs(c[0] - gr), abs(c[1] - gc)
-        return ew * ((dr + dc) + (SQRT2 - 2.0) * min(dr, dc) if connectivity == 8 else dr + dc)
+        diagonal = min(dr, dc) if connectivity == 8 else 0
+        meters = (diagonal * math.hypot(terrain.dx, terrain.dy)
+                  + (dr - diagonal) * terrain.dy + (dc - diagonal) * terrain.dx)
+        return ew * meters / terrain.model.cell_size_m
 
     best = {start: 0.0}
     parent: dict[Cell, Cell] = {}
@@ -381,7 +376,7 @@ def select_waypoints(terrain: Terrain, start: Cell, goal: Cell, n_waypoints: int
     length = float(np.linalg.norm(axis))
     if length == 0:
         raise ValueError("start and goal must differ")
-    rr, cc = np.mgrid[0:terrain.size, 0:terrain.size]
+    rr, cc = np.mgrid[0:terrain.rows, 0:terrain.cols]
     vr, vc = rr - s[0], cc - s[1]
     t = (vr * axis[0] + vc * axis[1]) / length ** 2               # progress along the axis
     perp = np.abs(axis[0] * vc - axis[1] * vr) / length            # distance from the axis
@@ -564,21 +559,21 @@ def exhaustive_qubo_check(graph: WaypointGraph, norm_costs: dict, penalty: float
 
 def decode_arcs(selected: list[tuple[int, int]], graph: WaypointGraph) -> Optional[list[int]]:
     """Follow selected arcs from source to target. None if no valid simple path."""
-    out: dict[int, list[int]] = {}
+    out: dict[int, int] = {}
+    incoming = set()
     for i, j in selected:
-        out.setdefault(i, []).append(j)
+        if (i, j) not in graph.arcs or i in out or j in incoming:
+            return None
+        out[i] = j
+        incoming.add(j)
     path, seen = [graph.source], {graph.source}
     while path[-1] != graph.target:
-        nxt = out.get(path[-1])
-        if not nxt:
-            return None
-        # if a stray cycle shares a node with the path, prefer the cheaper continuation
-        j = min(nxt, key=lambda v: graph.arcs[(path[-1], v)])
-        if j in seen:
+        j = out.get(path[-1])
+        if j is None or j in seen:
             return None
         path.append(j)
         seen.add(j)
-    return path
+    return path if len(path) == len(selected) + 1 else None
 
 
 def _node_path_cost(graph: WaypointGraph, node_path: list[int]) -> float:
@@ -680,6 +675,8 @@ def run_quantum(terrain: Terrain, start: Cell, goal: Cell, cfg: QuantumConfig,
     if note:
         out["details"]["backend_note"] = note + "; fell back to statevector"
     out["details"]["backend"] = used
+    post_start = time.perf_counter()
+    out["details"]["optimization_sampling_ms"] = round((post_start - t0) * 1e3, 3)
 
     # Post-process: among all sampled bitstrings, keep the cheapest valid s->t path.
     arc_by_var = {v: a for a, v in name.items()}
@@ -690,8 +687,7 @@ def run_quantum(terrain: Terrain, start: Cell, goal: Cell, cfg: QuantumConfig,
         node_path = decode_arcs(chosen, graph)
         if node_path is None:
             continue
-        if len(chosen) == len(node_path) - 1:                 # exactly a path, no stray cycles
-            valid_prob += float(s.probability)
+        valid_prob += float(s.probability)
         cost = _node_path_cost(graph, node_path)
         if cost < best_cost:
             best_path, best_cost = node_path, cost
@@ -715,6 +711,9 @@ def run_quantum(terrain: Terrain, start: Cell, goal: Cell, cfg: QuantumConfig,
     if out["status"] != "fallback_exact_waypoint_graph":
         optimal = ref is not None and abs(best_cost - ref[1]) < 1e-9
         out["status"] = "optimal_on_waypoint_graph" if optimal else "feasible_suboptimal"
+    out["details"]["postprocessing_ms"] = round((time.perf_counter() - post_start) * 1e3, 3)
+    out["details"]["total_ms"] = round((time.perf_counter() - t_pre) * 1e3, 3)
+    out["details"]["waypoint_gap_percent"] = round(100 * (out["metrics"].total_cost / ref[1] - 1), 5) if ref else None
     return out
 
 
