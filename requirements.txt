@@ -1,0 +1,5 @@
+# Tested on CPython 3.12.10. The public static edition needs no Python runtime.
+fastapi==0.115.6
+numpy==2.4.4
+pydantic==2.10.4
+uvicorn==0.34.0

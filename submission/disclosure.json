@@ -1,0 +1,23 @@
+{
+  "project": "Marswalk: A Martian Survival Map by Quantumions",
+  "version": "2026-11-15",
+  "code": {
+    "tool": "OpenAI Codex",
+    "description": "Team-confirmed original code assistance; new processing scripts, implementation, tests and review materials developed with Codex assistance."
+  },
+  "text": {
+    "tool": "OpenAI Codex",
+    "scope": "Interface and submission text, documentation, presentation copy."
+  },
+  "artwork": {
+    "file": "static/quantumions.png",
+    "supplied_by": "Quantumions",
+    "tool": "ChatGPT Image",
+    "display_label": "AI-generated team logo"
+  },
+  "observational_data": "NASA and USGS mission products listed in static/data/manifest.json.",
+  "derived_data": "Numerical crop, resampling, grades, modeled exclusions, graph weights and route outputs calculated by the documented code. No generative model supplied missing elevations.",
+  "demonstration": "Screenshots of the app, six-slide presentation; explicit real Qiskit simulator recording.",
+  "audio": null,
+  "video": null
+}
