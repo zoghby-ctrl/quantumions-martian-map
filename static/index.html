@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101716">
+  <title>Marswalk · Jezero Route Lab</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Marswalk home">
+      <span class="brand-mark">M</span>
+      <span>MARSWALK <small>FIELD ROUTE LAB</small></span>
+    </a>
+    <div class="service-state"><span id="serviceDot" class="dot"></span><span id="serviceText">Checking local router…</span></div>
+  </header>
+
+  <main>
+    <section class="intro">
+      <p class="eyebrow">Jezero crater · synthetic terrain preview</p>
+      <h1>One landscape.<br><em>Two ways through.</em></h1>
+      <p class="intro-copy">Compare a full-grid classical route with a QAOA waypoint route. Both are scored against the same slope, radiation, and crater hazards.</p>
+      <div class="hero-actions">
+        <button class="button button-primary" id="loadDemo">Load Demo Marswalk <span aria-hidden="true">↗</span></button>
+        <span class="demo-caption">18.44° N, 77.45° E <b>→</b> 18.52° N, 77.62° E</span>
+      </div>
+    </section>
+
+    <section class="workspace" aria-label="Route planning workspace">
+      <aside class="panel controls">
+        <div class="panel-heading"><div><p class="eyebrow">01 / ROUTE INPUT</p><h2>Set the traverse</h2></div><span class="panel-icon">⌖</span></div>
+        <div class="endpoint-mode" role="group" aria-label="Choose which endpoint to place on map">
+          <button id="pickStart" class="mode active" type="button">Set start</button>
+          <button id="pickEnd" class="mode" type="button">Set destination</button>
+        </div>
+        <div class="coordinate-pair">
+          <label class="coordinate-card"><span class="coordinate-title"><i class="pin pin-start"></i>START</span>
+            <span class="coordinate-fields"><input id="startLat" aria-label="Start latitude" type="number" step="0.01"><b>°N</b><input id="startLon" aria-label="Start longitude" type="number" step="0.01"><b>°E</b></span>
+          </label>
+          <label class="coordinate-card"><span class="coordinate-title"><i class="pin pin-end"></i>DESTINATION</span>
+            <span class="coordinate-fields"><input id="endLat" aria-label="Destination latitude" type="number" step="0.01"><b>°N</b><input id="endLon" aria-label="Destination longitude" type="number" step="0.01"><b>°E</b></span>
+          </label>
+        </div>
+
+        <div class="section-rule"></div>
+        <div class="panel-heading compact"><div><p class="eyebrow">02 / COST BALANCE</p><h2>Terrain priorities</h2></div><span class="weight-total" id="weightTotal">80%</span></div>
+        <label class="slider-row" for="slopeWeight"><span><span class="slider-name">Slope &amp; rollover</span><span class="slider-value" id="slopeValue">35%</span></span><input id="slopeWeight" type="range" min="0" max="100" value="35"><span class="slider-hint">Steep ground costs rover energy.</span></label>
+        <label class="slider-row" for="radiationWeight"><span><span class="slider-name">Radiation exposure</span><span class="slider-value" id="radiationValue">45%</span></span><input id="radiationWeight" type="range" min="0" max="100" value="45"><span class="slider-hint">Higher exposure adds route risk.</span></label>
+        <p class="weight-note">Crater proximity uses the remaining cost share. The two sliders must total 100% or less.</p>
+        <button class="button button-run" id="runRoute" type="button">Run route comparison <span aria-hidden="true">→</span></button>
+        <div id="alert" class="alert" role="status" aria-live="polite" hidden></div>
+        <p class="bbox-note">Map window: 77.35–77.75° E · 18.35–18.65° N</p>
+      </aside>
+
+      <section class="panel map-panel" aria-label="Jezero terrain map">
+        <div class="map-header"><div><p class="eyebrow">03 / ROUTE OVERLAY</p><h2>Jezero traverse map</h2></div><span class="map-badge"><span></span>20 × 20 TERRAIN GRID</span></div>
+        <div class="map-frame" id="mapFrame">
+          <svg id="terrainMap" viewBox="0 0 1040 1040" preserveAspectRatio="none" role="img" aria-label="Synthetic terrain grid with crater obstacles and route overlays"></svg>
+          <div class="map-corner map-north">N <span>↑</span></div>
+          <div class="map-corner map-scale">GRID CELLS · 100% LOCAL VIEW</div>
+          <div class="map-coord map-coord-nw">18.65° N<br>77.35° E</div>
+          <div class="map-coord map-coord-se">18.35° N<br>77.75° E</div>
+        </div>
+        <div class="map-footer">
+          <div class="legend"><span><i class="legend-line classical"></i>Classical A*</span><span><i class="legend-line quantum"></i><span id="quantumLegendLabel">QAOA waypoint route</span></span><span><i class="legend-crater"></i>Impassable crater</span></div>
+          <span class="map-hint">Click a clear cell to place the selected endpoint</span>
+        </div>
+        <div id="resultBanner" class="result-banner" hidden></div>
+      </section>
+    </section>
+
+    <section id="comparison" class="comparison" aria-label="Route metrics" hidden>
+      <div class="section-heading"><div><p class="eyebrow">04 / SIDE BY SIDE</p><h2>What changed?</h2></div><p id="comparisonText" class="comparison-text"></p></div>
+      <div class="metric-grid">
+        <article class="metric-card"><div class="metric-title"><i class="pin pin-start"></i>CLASSICAL A*</div><div class="metric-number" id="classicalCost">—</div><div class="metric-unit">weighted route cost</div><div class="metric-divider"></div><div class="metric-stats"><span>Distance <b id="classicalDistance">—</b></span><span>Hazard <b id="classicalHazard">—</b></span></div></article>
+        <article class="metric-card metric-quantum"><div class="metric-title"><i class="pin pin-end"></i><span id="quantumMetricTitle">QAOA WAYPOINT</span></div><div class="metric-number" id="quantumCost">—</div><div class="metric-unit">weighted route cost</div><div class="metric-divider"></div><div class="metric-stats"><span>Distance <b id="quantumDistance">—</b></span><span>Hazard <b id="quantumHazard">—</b></span></div></article>
+        <article class="metric-card metric-delta"><div class="metric-title">ROUTE DELTA</div><div class="metric-number" id="costDelta">—</div><div class="metric-unit" id="deltaUnit">QAOA cost vs A*</div><div class="metric-divider"></div><div class="metric-stats"><span>QAOA steps <b id="quantumSteps">—</b></span><span>Solver <b id="solverStatus">—</b></span></div></article>
+      </div>
+      <p id="resultSource" class="result-source"></p>
+    </section>
+
+    <section class="explain-section">
+      <div class="explain-intro"><p class="eyebrow">THE 30-SECOND JUDGE ANSWER</p><h2>What does the quantum part do?</h2><p>It searches a compact route-choice problem built from terrain-aware legs.</p></div>
+      <div class="explain-grid">
+        <article class="explain-card"><span class="explain-index">01</span><h3>Classical baseline</h3><p>A* searches the full cell grid and returns the lowest-cost legal route for the selected weights. It is the optimal reference for this terrain model.</p></article>
+        <article class="explain-card"><span class="explain-index">02</span><h3>Quantum formulation</h3><p>The QAOA side first builds a small waypoint graph. Each possible directed leg gets a binary choice; the QUBO cost rewards inexpensive legs and penalizes broken flow at the start, goal, or intermediate waypoints.</p></article>
+        <article class="explain-card"><span class="explain-index">03</span><h3>Honest comparison</h3><p>QAOA samples candidate bitstrings, then the best valid waypoint route is expanded back onto the grid and rescored. It is a heuristic over a smaller graph, so it can take a longer route. This demo makes no quantum-speedup claim.</p></article>
+      </div>
+    </section>
+
+    <footer><span>MARSWALK · LOCAL DEMO</span><span>Synthetic terrain for route-comparison testing · Not mission navigation data</span></footer>
+  </main>
+  <script src="app.js" defer></script>
+</body>
+</html>

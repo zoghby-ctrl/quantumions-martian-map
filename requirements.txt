@@ -1,0 +1,8 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+numpy>=1.26
+qiskit>=1.2
+qiskit-algorithms>=0.4
+qiskit-optimization>=0.7
+pytest>=8.0
+httpx>=0.27
