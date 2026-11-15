@@ -4,6 +4,21 @@
 
 Explore the western delta of Jezero crater with MRO/CTX imagery, native MGS/MOLA elevation and shot counts, and three Perseverance sites. Choose two sites or place your own endpoints, tune terrain priorities, inspect the route briefing and download the result. The downloadable geometry uses east longitude and planetocentric north latitude on **Mars**. Earth GIS tools may display it on Earth by default.
 
+## For our team
+## Team Contributions
+
+Quantumions developed Marswalk collaboratively. Both team members contributed to the project’s development, research, and preparation for the NASA Space Apps Challenge.
+This project builds on work contributed by the Quantumions team. The current implementation and submission materials are on the **codex/jezero-traverse** branch.
+
+- [View this branch on GitHub](https://github.com/zoghby-ctrl/quantumions-martian-map/tree/codex/jezero-traverse)
+- [Edit this README on GitHub](https://github.com/zoghby-ctrl/quantumions-martian-map/edit/codex/jezero-traverse/README.md)
+- [Review the project and submission text](submission/PROJECT.md)
+- [Review the sources and AI disclosure](submission/RESOURCES.md)
+
+To contribute through GitHub, sign in to your own account and open the README edit link. Make your changes, select **Commit changes**, and follow GitHub's prompts to commit to the branch or propose a pull request. A commit made with your GitHub account records your contribution in the project history. If GitHub offers to fork the repository, propose your changes from the fork or ask the repository owner to add you as a collaborator with write access. The repository owner can invite you under **Settings → Collaborators and teams**.
+
+The live site is published from a separate branch, so edits to this README or the source branch do not automatically change the public planner.
+
 ## Run the full application
 
 Use CPython 3.12. Create an environment with `python -m venv .venv`. Activate it with `.venv\Scripts\Activate.ps1` on Windows or `source .venv/bin/activate` on macOS/Linux. From the repository root run:
